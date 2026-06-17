@@ -1,0 +1,35 @@
+pipeline {
+    agent any
+    tools{
+        maven 'MVN3.9'
+    }
+
+    stages {
+        stage('Copy code from REPO') {
+            steps {
+                git branch: 'atom', url: 'https://github.com/hkhcoder/vprofile-project.git'
+            }
+        }
+        stage('Build the code') {
+            steps {
+                sh 'mvn install -DskipTests'
+            }
+            post{
+                success{
+                    echo "Archiving the war file"
+                    archiveArtifacts artifacts: "**/*.war"
+                }
+            }
+        }
+        stage('Unit Test the code'){
+            steps{
+                sh 'mvn test'
+            }
+        }
+        stage('Checkstyle verification'){
+            steps{
+                sh 'mvn checkstyle:checkstyle'
+            }
+        }
+    }
+}

@@ -1,0 +1,106 @@
+pipeline{
+    environment{
+        registryN= '765140436911.dkr.ecr.us-east-1.amazonaws.com/my_code_image'
+        registryURL= 'http://765140436911.dkr.ecr.us-east-1.amazonaws.com'
+        registryCred= 'ecr:us-east-1:AWSCred'
+    }
+    agent any
+    tools{
+        maven 'MVN3.9'
+        jdk 'JDK17'
+    }
+    stages{
+        stage('Pull the code from the REPO'){
+            steps{
+                git branch: 'docker', url: 'https://github.com/hkhcoder/vprofile-project.git'
+            }
+        }
+        stage('build the code'){
+            steps{
+                sh 'mvn install -DskipTests'
+            }
+            post{
+                success{
+                    echo 'Archiving the build'
+                    archiveArtifacts artifacts: '**/*.war'
+                }
+            }
+        }
+        stage('Test the built war'){
+            steps{
+                sh 'mvn test'
+            }
+        }
+        stage('Checkstyle analysis'){
+            steps{
+                sh 'mvn checkstyle:checkstyle'
+            }
+        }
+        stage('Do Sonar Analysis'){
+            environment {
+                scannerHome = tool 'Sonar8';
+            }
+          steps{
+            withSonarQubeEnv('SonarServer') { 
+              sh '''${scannerHome}/bin/sonar-scanner \
+              -Dsonar.projectKey='VprofileKey' \
+              -Dsonar.projectName='VprofileApp' \
+              -Dsonar.projectVersion=1.0 \
+              -Dsonar.sources=src/ \
+              -Dsonar.java.binaries=target/classes \
+              -Dsonar.junit.reportsPath=target/surefire-reports \
+              -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml \
+              -Dsonar.java.checkstyle.reportPaths=target/checkstyle-result.xml'''
+            }
+          }
+        }
+        stage('Qaulity gate analysis'){
+            steps{
+                timeout(time: 1, unit: 'HOURS') {
+                    waitForQualityGate abortPipeline: true
+            }
+        }
+        }
+//        stage("Publish to Nexus") {
+//            steps {
+//                nexusArtifactUploader(
+//                    nexusVersion: 'nexus3',
+//                    protocol: 'http',
+//                    nexusUrl: '172.31.21.185:8081',
+//                    groupId: 'QA',
+//                    version: "${env.BUILD_ID}-${BUILD_TIMESTAMP}",
+//                    repository: 'vprofile-repo',
+//                    credentialsId: 'nexuslogin',
+//                    artifacts: [
+//                        [  artifactId: 'vproapp', 
+//                        classifier: '', 
+//                        file: 'target/vprofile-v2.war', 
+//                        type: 'war'  ]
+//                        ]
+//                        )
+//            }
+//        }
+        stage('Build the docker image'){
+            steps{
+                script{
+                    dockerImage = docker.build(registryN+":${BUILD_NUMBER}", "./Docker-files/app/multistage/")
+                }
+            }
+        }
+        stage('Push the docker image'){
+            steps{
+                script{
+                    docker.withRegistry( registryURL, registryCred ) {
+                        dockerImage.push("$BUILD_NUMBER")
+                        dockerImage.push('latest')
+                }
+            }
+        }
+    }
+    stage('Delete the local docker images'){
+        steps{
+            sh 'docker rmi -f $(docker images -aq)'
+        }
+    }
+}
+}

@@ -1,0 +1,90 @@
+pipeline{
+    environment{
+        registryName='765140436911.dkr.ecr.us-east-1.amazonaws.com/my_code_image'
+        registryUrl= 'http://765140436911.dkr.ecr.us-east-1.amazonaws.com'
+        RegistryCred= 'ecr:us-east-1:AWSCred'
+        CLUSTER_NAME= 'sample_cluster2004'
+        SERVICE_NAME= 'sample_Task_Def-service'
+    }
+    agent any
+    tools{
+        maven 'MVN3.9'
+        jdk 'JDK17'
+    }
+    stages{
+        stage('Pull the code'){
+            steps{
+                git branch: 'docker', url: 'https://github.com/hkhcoder/vprofile-project.git'
+            }
+        }
+        stage('Build the code'){
+            steps{
+                sh 'mvn install -DskipTests'
+            }
+            post{
+                success{
+                    echo "Archiving the build war"
+                    archiveArtifacts artifacts: '**/*.war'
+                }
+            }
+        }
+        stage('Test the code'){
+            steps{
+                sh 'mvn test'
+            }
+        }
+        stage('Perform Checkstyle Analysis'){
+            steps{
+                sh 'mvn checkstyle:checkstyle'
+            }
+        }
+        stage('Perform SonarQube analysis'){
+            environment {
+                scannerHome = tool 'Sonar8'
+            }
+            steps {
+              withSonarQubeEnv('SonarServer') {
+                sh '''${scannerHome}/bin/sonar-scanner -Dsonar.projectKey=vprofileApp \
+                   -Dsonar.projectName=vprofileApp \
+                   -Dsonar.projectVersion=1.0 \
+                   -Dsonar.sources=src/ \
+                   -Dsonar.java.binaries=target/test-classes/com/visualpathit/account/controllerTest/ \
+                   -Dsonar.junit.reportsPath=target/surefire-reports/ \
+                   -Dsonar.jacoco.reportsPath=target/jacoco.exec \
+                   -Dsonar.java.checkstyle.reportPaths=target/checkstyle-result.xml'''
+              }
+            }
+        }
+        stage('Perform Quality Gate check'){
+            steps {
+                timeout(time: 1, unit: 'HOURS') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+        stage('Build docker image'){
+            steps{
+                script{
+                    dockerImage= docker.build(registryName+":$BUILD_NUMBER", "./Docker-files/app/multistage/")
+                }
+            }
+        }
+        stage('Upload the docker image to ECR'){
+            steps{
+                script{
+                    docker.withRegistry(registryURL, registryCred){
+                        dockerImage.push("$BUILD_NUMBER")
+                        dockerImage.push("latest")
+                    }
+                }
+            }
+        }
+        stage('Deploy the built image to ECS'){
+            steps{
+                withAWS(credentials: 'AWSCred', region: 'us-east-1'){
+                    sh 'aws ecs update-service --cluster ${CLUSTER_NAME} --service ${SERVICE_NAME} --force-new-deployment'
+                }
+            }
+        }
+    }
+}
